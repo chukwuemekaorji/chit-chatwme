@@ -1,92 +1,72 @@
-let ws;
-let pc;
+const socket = io();
+const room = "default-room";
+
 let localStream;
-let roomName = "";
+let peer;
+
+const localVideo = document.getElementById("localVideo");
+const remoteVideo = document.getElementById("remoteVideo");
+
+const muteBtn = document.getElementById("muteBtn");
+const camBtn = document.getElementById("camBtn");
 
 let audioEnabled = true;
 let videoEnabled = true;
 
-async function init() {
-  try {
-    localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
-  } catch {
-    document.getElementById("error").innerText = "Camera and microphone are required.";
-    return;
-  }
-}
+navigator.mediaDevices.getUserMedia({ video: true, audio: true })
+.then(stream => {
+    localStream = stream;
+    localVideo.srcObject = stream;
 
-init();
+    socket.emit("join", room);
+})
+.catch(err => console.error("Error:", err));
 
-document.getElementById("joinBtn").onclick = () => {
-  const input = document.getElementById("roomInput").value.trim();
-  if (!input) return alert("Enter a valid room name.");
+socket.on("joined", () => {
+    startCall(true);
+});
 
-  roomName = input;
+socket.on("signal", async data => {
+    if (!peer) startCall(false);
+    await peer.setRemoteDescription(new RTCSessionDescription(data));
 
-  ws = new WebSocket("ws://" + window.location.host);
-  ws.onopen = () => {
-    ws.send(JSON.stringify({ type: "join", room: roomName }));
-  };
-
-  ws.onmessage = async (msg) => {
-    const data = JSON.parse(msg.data);
-
-    if (data.type === "room_full") return alert("Room is full.");
-
-    if (data.type === "joined") setupRTC();
-
-    if (data.type === "ready") makeOffer();
-
-    if (data.type === "signal") {
-      if (data.offer) {
-        await pc.setRemoteDescription(new RTCSessionDescription(data.offer));
-        const answer = await pc.createAnswer();
-        await pc.setLocalDescription(answer);
-        ws.send(JSON.stringify({ type: "signal", room: roomName, answer }));
-      }
-
-      if (data.answer) {
-        await pc.setRemoteDescription(new RTCSessionDescription(data.answer));
-      }
-
-      if (data.ice) pc.addIceCandidate(data.ice);
+    if (data.type === "offer") {
+        const answer = await peer.createAnswer();
+        await peer.setLocalDescription(answer);
+        socket.emit("signal", { room, signal: answer });
     }
-  };
-};
+});
 
-function setupRTC() {
-  pc = new RTCPeerConnection();
+function startCall(isCaller) {
+    peer = new RTCPeerConnection();
 
-  localStream.getTracks().forEach(t => pc.addTrack(t, localStream));
+    localStream.getTracks().forEach(track => peer.addTrack(track, localStream));
 
-  pc.ontrack = (e) => {
-    document.getElementById("remoteVideo").srcObject = e.streams[0];
-  };
+    peer.ontrack = (event) => {
+        remoteVideo.srcObject = event.streams[0];
+    };
 
-  pc.onicecandidate = (e) => {
-    if (e.candidate) {
-      ws.send(JSON.stringify({ type: "signal", room: roomName, ice: e.candidate }));
+    if (isCaller) {
+        peer.createOffer().then(offer => {
+            peer.setLocalDescription(offer);
+            socket.emit("signal", { room, signal: offer });
+        });
     }
-  };
-
-  document.getElementById("localVideo").srcObject = localStream;
-  document.getElementById("chat-screen").classList.remove("hidden");
 }
 
-async function makeOffer() {
-  const offer = await pc.createOffer();
-  await pc.setLocalDescription(offer);
-  ws.send(JSON.stringify({ type: "signal", room: roomName, offer }));
-}
-
-document.getElementById("mute-btn").onclick = () => {
-  audioEnabled = !audioEnabled;
-  localStream.getAudioTracks()[0].enabled = audioEnabled;
-  document.getElementById("mute-btn").innerText = audioEnabled ? "Mute" : "Unmute";
+muteBtn.onclick = () => {
+    audioEnabled = !audioEnabled;
+    localStream.getAudioTracks()[0].enabled = audioEnabled;
+    muteBtn.textContent = audioEnabled ? "Mute" : "Unmute";
 };
 
-document.getElementById("camera-btn").onclick = () => {
-  videoEnabled = !videoEnabled;
-  localStream.getVideoTracks()[0].enabled = videoEnabled;
-  document.getElementById("camera-btn").innerText = videoEnabled ? "Camera Off" : "Camera On";
+camBtn.onclick = () => {
+    videoEnabled = !videoEnabled;
+    localStream.getVideoTracks()[0].enabled = videoEnabled;
+    camBtn.textContent = videoEnabled ? "Camera Off" : "Camera On";
 };
+const PORT = process.env.PORT || 3000;
+
+server.listen(PORT, () => {
+  console.log("Server running on port " + PORT);
+});
